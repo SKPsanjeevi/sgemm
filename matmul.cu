@@ -5,26 +5,26 @@
 #define matSize 1024
 
 __global__
-void mmNaive(float *A, float *B, float *C, int M, int N, int P){
+void mmNaive(float *A, float *B, float *C, int M, int N, int K){
     int i = threadIdx.x + blockIdx.x * blockDim.x;
     int j = threadIdx.y + blockIdx.y * blockDim.y;
     if(i < M && j < N){
         float tmp = 0.;
-        for(int k = 0; k < P; k++){
-            tmp += A[i*P + k] * B[j + k*N];
+        for(int k = 0; k < K; k++){
+            tmp += A[i*K + k] * B[j + k*N];
         }
         C[i * N + j] = tmp;
     }
 }
 
 __global__
-void mmCoalesced(float *A, float *B, float *C, int M, int N, int P){
+void mmCoalesced(float *A, float *B, float *C, int M, int N, int K){
     int i = threadIdx.x + blockIdx.x * blockDim.x;
     int j = threadIdx.y + blockIdx.y * blockDim.y;
     if(i < N  && j < M){
         float tmp = 0.;
-        for(int k = 0; k < P; k++){
-            tmp += A[j*P + k] * B[i + k*N];
+        for(int k = 0; k < K; k++){
+            tmp += A[j*K + k] * B[i + k*N];
         }
         C[j * N + i] = tmp;
     }
@@ -33,7 +33,7 @@ void mmCoalesced(float *A, float *B, float *C, int M, int N, int P){
 // shared memory optimization
 template <const int BLOCKSIZE>
 __global__
-void mmShared(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C, int M, int N, int P){
+void mmShared(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C, int M, int N, int K){
     __shared__ float sA[BLOCKSIZE * BLOCKSIZE];
     __shared__ float sB[BLOCKSIZE * BLOCKSIZE];
 
@@ -43,18 +43,21 @@ void mmShared(float* __restrict__ A, float* __restrict__ B, float* __restrict__ 
     int tx = threadIdx.x;
     int ty = threadIdx.y;
 
+    A += K * BLOCKSIZE * blockIdx.y;
+    B += blockIdx.x * BLOCKSIZE;
+
     // grid block configured based on output matrix dimensions
     // each thread takes care of respective output (via tmp)
     float tmp = 0.0;
-    for(int p = 0; p < P; p += BLOCKSIZE) {             // sliding window
-
-        int startA = P * BLOCKSIZE * blockIdx.y + p;    // starting element of A's submatrix
-        int startB = p * N + blockIdx.x * BLOCKSIZE;    // starting element of B's submatrix
+    for(int k = 0; k < K; k += BLOCKSIZE) {             // sliding window
 
         // copy data to shared memory
-        sA[ty * BLOCKSIZE + tx] = A[startA + ty * P + tx];
-        sB[ty * BLOCKSIZE + tx] = B[startB + ty * N + tx];
+        sA[ty * BLOCKSIZE + tx] = A[ty * K + tx];
+        sB[ty * BLOCKSIZE + tx] = B[ty * N + tx];
         __syncthreads();
+
+        A += BLOCKSIZE;         // update starting element of A's submatrix
+        B += BLOCKSIZE * N;     // update starting element of B's submatrix
 
         // loop over submatrix and add to respective thread's tmp variable
         for(int ps = 0; ps < BLOCKSIZE; ps++) {
@@ -104,21 +107,11 @@ void mm1DRegisterTiling(float* __restrict__ A, float* __restrict__ B, float* __r
         }
         __syncthreads();
     }
+
     #pragma unroll
     for(int ts = 0; ts < REGTILESIZE; ts++){
         C[(y+ts) * N + x] = tmp[ts];
     }
-
-    // if(blockIdx.x == 1 && blockIdx.y == 1 && tx == 0 && ty == 2){
-    //     printf("\n");
-    //     for(int ts = 0; ts < REGTILESIZE; ts++){
-    //         printf("%f\n", tmp[ts]);
-    //     }
-    //     printf("\n");
-    // }
-
-    // if(x == 0 && y == 0)
-    //     printArrayDevice(C, M, N);
 }
 
 
@@ -397,11 +390,13 @@ int main(){
     // // Coalesced access
     // mmCoalesced<<<gridSize, blockSize>>>(A, B, C, M, N, P);
 
-    // // Shared memory
-    // int numThreads = 32;
-    // dim3 blockSize(numThreads, numThreads);
-    // dim3 gridSize(ceil(M / numThreads), ceil(N / numThreads));
-    // mmShared<32><<<gridSize, blockSize>>>(A, B, C, M, N, P);
+{
+    // Shared memory
+    const int numThreads = 32;
+    dim3 blockSize(numThreads, numThreads);
+    dim3 gridSize(CEIL_DIV(N, numThreads), CEIL_DIV(M, numThreads));
+    mmShared<numThreads><<<gridSize, blockSize>>>(A, B, C, M, N, P);
+}
 
     // // 1D tiling
     // const int numThreads = 32;
@@ -426,14 +421,14 @@ int main(){
     // mm2DRegisterTiling<BLOCKSIZE, REGTILESIZE><<<gridSize, blockSize>>>(A, B, C, M, N, P);
     // }
 
-{
+/*{
     // vectorize register loads
     const int BLOCKSIZE = 64;
     const int REGTILESIZE = 4;
     dim3 blockSize(BLOCKSIZE/REGTILESIZE, BLOCKSIZE/REGTILESIZE); // numThreads in x, y direction
     dim3 gridSize(CEIL_DIV(N, BLOCKSIZE), CEIL_DIV(M, BLOCKSIZE));
     vectorizeRegisterLoads<BLOCKSIZE, REGTILESIZE><<<gridSize, blockSize>>>(A, B, C, M, N, P);
-}
+}*/
     
     auto start = std::chrono::steady_clock::now();
     cuBLAScomputeMM(A, B, C_cuBLAS, M, N, P);
