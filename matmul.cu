@@ -49,6 +49,7 @@ void mmShared(float* __restrict__ A, float* __restrict__ B, float* __restrict__ 
     // grid block configured based on output matrix dimensions
     // each thread takes care of respective output (via tmp)
     float tmp = 0.0;
+    
     for(int k = 0; k < K; k += BLOCKSIZE) {             // sliding window
 
         // copy data to shared memory
@@ -72,7 +73,7 @@ void mmShared(float* __restrict__ A, float* __restrict__ B, float* __restrict__ 
 // 1D register tiling
 template <const int BLOCKSIZE, const int REGTILESIZE>
 __global__
-void mm1DRegisterTiling(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C, int M, int N, int P){
+void mm1DRegisterTiling(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C, int M, int N, int K){
     __shared__ float sA[BLOCKSIZE * BLOCKSIZE];
     __shared__ float sB[BLOCKSIZE * BLOCKSIZE];
 
@@ -82,20 +83,24 @@ void mm1DRegisterTiling(float* __restrict__ A, float* __restrict__ B, float* __r
     int tx = threadIdx.x;
     int ty = threadIdx.y * REGTILESIZE;
 
+    A += K * BLOCKSIZE * blockIdx.y;
+    B += blockIdx.x * BLOCKSIZE;
+
     // each thread takes care of REGTILESIZE outputs along the columnwise direction
     float tmp[REGTILESIZE] = {0.0};
-    for(int p = 0; p < P; p += BLOCKSIZE) {             // sliding window
 
-        int startA = P * BLOCKSIZE * blockIdx.y + p;    // starting element of A's submatrix
-        int startB = p * N + blockIdx.x * BLOCKSIZE;    // starting element of B's submatrix
+    for(int k = 0; k < K; k += BLOCKSIZE) {             // sliding window
 
         // copy data to shared memory
         #pragma unroll
         for(int ts = 0; ts < REGTILESIZE; ts++){
-            sA[(ty + ts) * BLOCKSIZE + tx] = A[startA + (ty + ts) * P + tx];
-            sB[(ty + ts) * BLOCKSIZE + tx] = B[startB + (ty + ts) * N + tx];
+            sA[(ty + ts) * BLOCKSIZE + tx] = A[(ty + ts) * K + tx];
+            sB[(ty + ts) * BLOCKSIZE + tx] = B[(ty + ts) * N + tx];
         }
         __syncthreads();
+
+        A += BLOCKSIZE;         // update starting element of A's submatrix
+        B += BLOCKSIZE * N;     // update starting element of B's submatrix
 
         // loop over submatrix and add to respective output's tmp variable
         for(int ps = 0; ps < BLOCKSIZE; ps++) {
@@ -390,27 +395,31 @@ int main(){
     // // Coalesced access
     // mmCoalesced<<<gridSize, blockSize>>>(A, B, C, M, N, P);
 
-{
+/*{
     // Shared memory
     const int numThreads = 32;
     dim3 blockSize(numThreads, numThreads);
     dim3 gridSize(CEIL_DIV(N, numThreads), CEIL_DIV(M, numThreads));
     mmShared<numThreads><<<gridSize, blockSize>>>(A, B, C, M, N, P);
+}*/
+
+{
+    // 1D tiling
+    const int numThreads = 32;
+    const int REGTILESIZE = 8;
+    dim3 blockSize(numThreads, numThreads / REGTILESIZE);
+    dim3 gridSize(CEIL_DIV(N, numThreads), CEIL_DIV(M, numThreads));
+    mm1DRegisterTiling<numThreads, REGTILESIZE><<<gridSize, blockSize>>>(A, B, C, M, N, P);
 }
 
-    // // 1D tiling
-    // const int numThreads = 32;
-    // const int REGTILESIZE = 8;
-    // dim3 blockSize(numThreads, numThreads / REGTILESIZE);
-    // dim3 gridSize(CEIL_DIV(N, numThreads), CEIL_DIV(M, numThreads));
-    // mm1DRegisterTiling<numThreads, REGTILESIZE><<<gridSize, blockSize>>>(A, B, C, M, N, P);
-
-    // // 2D tiling (no sA transpose)
-    // const int BLOCKSIZE = 64;
-    // const int REGTILESIZE = 4;
-    // dim3 blockSize(BLOCKSIZE/REGTILESIZE, BLOCKSIZE/REGTILESIZE); // numThreads in x, y direction
-    // dim3 gridSize(CEIL_DIV(N, BLOCKSIZE), CEIL_DIV(M, BLOCKSIZE));
-    // mm2DRegisterTilingNoSAtranspose<BLOCKSIZE, REGTILESIZE><<<gridSize, blockSize>>>(A, B, C, M, N, P);
+/*{
+    // 2D tiling (no sA transpose)
+    const int BLOCKSIZE = 64;
+    const int REGTILESIZE = 4;
+    dim3 blockSize(BLOCKSIZE/REGTILESIZE, BLOCKSIZE/REGTILESIZE); // numThreads in x, y direction
+    dim3 gridSize(CEIL_DIV(N, BLOCKSIZE), CEIL_DIV(M, BLOCKSIZE));
+    mm2DRegisterTilingNoSAtranspose<BLOCKSIZE, REGTILESIZE><<<gridSize, blockSize>>>(A, B, C, M, N, P);
+}*/
 
     // // 2D tiling (with sA transposed)
     // {
