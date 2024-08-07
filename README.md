@@ -1,3 +1,5 @@
+*** Work in Progress ***
+
 Performance data on RTX3050Mobile for A(M x P) * B(P x N) = C(M x N). Here M = N = P = 1024.
 
 The max theoretical performance of a RTX3050 Mobile is 5.501 TFLOPS (FP32 / float) and global memory bandwidth of 192 GBytes/s.
@@ -32,8 +34,7 @@ For 2D register tiling, number of threads is a function of SM block size and reg
 |1D Register tiling			|	        | 2.064	        |38.85
 |2D register tiling (no sA transpose)	|		| 1.394		|57.50
 |2D register tiling (sA transpose)	|		| 1.737		|46.17
-
-
-
-|2D register tiling			|		| 1.605		|50.00
+|					|		|		|
+|					|		|		|
+|					|		|		|
 |sharedMM+2Dblocktiling+FLOAT4		|		| 1.105		|72.50
