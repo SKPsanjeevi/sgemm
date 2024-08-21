@@ -1,4 +1,5 @@
 *** Work in Progress ***
+TODO: convert MM to GEMM
 
 Performance data on RTX3050Mobile for A(M x P) * B(P x N) = C(M x N). Here M = N = P = 1024.
 
@@ -41,6 +42,7 @@ For 2D register tiling, number of threads is a function of SM block size and reg
 
 
 
-
+<!---
 Roofline model
 ![Roofline model plot based on the measured execution times](roofline.png)
+-->
