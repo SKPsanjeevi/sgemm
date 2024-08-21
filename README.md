@@ -38,3 +38,9 @@ For 2D register tiling, number of threads is a function of SM block size and reg
 |					|		|		|
 |					|		|		|
 |sharedMM+2Dblocktiling+FLOAT4		|		| 1.105		|72.50
+
+
+
+
+Roofline model
+![Roofline model plot based on the measured execution times](roofline.png)
