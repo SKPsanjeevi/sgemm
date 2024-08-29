@@ -71,38 +71,36 @@ void printArrayDevice(float *A, int rows, int cols){
     }
 }
 
-void computeMM(float *hA, float *hB, float *hC, int M, int N, int P){
+void computeMM(float *hA, float *hB, float *hC, int M, int N, int K){
     for(int i = 0; i < M; i++){
         for(int j = 0; j < N; j++){
             double tmp = 0.;
-            for(int k = 0; k < P; k++){
-                tmp += (double)hA[i*P + k] * (double)hB[j + k*N];
+            for(int k = 0; k < K; k++){
+                tmp += (double)hA[i*K + k] * (double)hB[j + k*N];
             }
             hC[i * N + j] = (float)tmp;
         }
     }
 }
 
-void cuBLAScomputeMM(float *A, float *B, float *C_cuBLAS, int M, int N, int P){
+void cuBLAScomputeMM(float *A, float *B, float *C_cuBLAS, int M, int N, int K, float alpha, float beta){
     cublasHandle_t handle;
     cublasCreate(&handle);
 
     // CUBLAS MM uses matrices in column-major order
-    // Therefore, instead of computing C' = (A * B)', we compute B' * A'.
-    float alpha = 1.0;
-    float beta = 0.0;
+    // Therefore, instead of computing C' = (A * B)', we compute B' * A'
 
     cublasSgemm(handle
                 , CUBLAS_OP_N   // no transpose for B (as it is row-major)
                 , CUBLAS_OP_N   // no transpose for A (as it is row-major)
                 , N
                 , M
-                , P
+                , K
                 , &alpha
                 , B             // note first input is B
                 , N
                 , A             // note second input is A
-                , P
+                , K
                 , &beta
                 , C_cuBLAS
                 , N

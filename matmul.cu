@@ -5,7 +5,7 @@
 #define matSize 1024
 
 __global__
-void mmNaive(float *A, float *B, float *C, int M, int N, int K){
+void mmNaive(float *A, float *B, float *C, int M, int N, int K, float alpha, float beta){
     int i = threadIdx.x + blockIdx.x * blockDim.x;
     int j = threadIdx.y + blockIdx.y * blockDim.y;
     if(i < M && j < N){
@@ -13,12 +13,12 @@ void mmNaive(float *A, float *B, float *C, int M, int N, int K){
         for(int k = 0; k < K; k++){
             tmp += A[i*K + k] * B[j + k*N];
         }
-        C[i * N + j] = tmp;
+        C[i * N + j] = alpha * tmp + beta * C[i * N + j];
     }
 }
 
 __global__
-void mmCoalesced(float *A, float *B, float *C, int M, int N, int K){
+void mmCoalesced(float *A, float *B, float *C, int M, int N, int K, float alpha, float beta){
     int i = threadIdx.x + blockIdx.x * blockDim.x;
     int j = threadIdx.y + blockIdx.y * blockDim.y;
     if(i < N  && j < M){
@@ -26,14 +26,16 @@ void mmCoalesced(float *A, float *B, float *C, int M, int N, int K){
         for(int k = 0; k < K; k++){
             tmp += A[j*K + k] * B[i + k*N];
         }
-        C[j * N + i] = tmp;
+        C[j * N + i] = alpha * tmp + beta * C[j * N + i];
     }
 }
 
 // shared memory optimization
 template <const int BLOCKSIZE>
 __global__
-void mmShared(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C, int M, int N, int K){
+void mmShared(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C,
+            int M, int N, int K,
+            float alpha, float beta){
     __shared__ float sA[BLOCKSIZE * BLOCKSIZE];
     __shared__ float sB[BLOCKSIZE * BLOCKSIZE];
 
@@ -66,14 +68,17 @@ void mmShared(float* __restrict__ A, float* __restrict__ B, float* __restrict__ 
         }
         __syncthreads();
     }
-    C[y * N + x] = tmp;
+    C[y * N + x] = alpha * tmp + beta * C[y * N + x];
 }
 
 
 // 1D register tiling
 template <const int BLOCKSIZE, const int REGTILESIZE>
 __global__
-void mm1DRegisterTiling(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C, int M, int N, int K){
+void mm1DRegisterTiling(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C,
+                        int M, int N, int K,
+                        float alpha, float beta){
+
     __shared__ float sA[BLOCKSIZE * BLOCKSIZE];
     __shared__ float sB[BLOCKSIZE * BLOCKSIZE];
 
@@ -115,7 +120,7 @@ void mm1DRegisterTiling(float* __restrict__ A, float* __restrict__ B, float* __r
 
     #pragma unroll
     for(int ts = 0; ts < REGTILESIZE; ts++){
-        C[(y+ts) * N + x] = tmp[ts];
+        C[(y+ts) * N + x] = alpha * tmp[ts] + beta * C[(y+ts) * N + x];
     }
 }
 
@@ -124,7 +129,9 @@ void mm1DRegisterTiling(float* __restrict__ A, float* __restrict__ B, float* __r
 // 2D register tiling (without sA transposed)
 template <const int BLOCKSIZE, const int REGTILESIZE>
 __global__
-void mm2DRegisterTilingNoSAtranspose(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C, int M, int N, int K){
+void mm2DRegisterTilingNoSAtranspose(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C,
+                                    int M, int N, int K,
+                                    float alpha, float beta){
     __shared__ float sA[BLOCKSIZE * BLOCKSIZE];
     __shared__ float sB[BLOCKSIZE * BLOCKSIZE];
 
@@ -182,7 +189,8 @@ void mm2DRegisterTilingNoSAtranspose(float* __restrict__ A, float* __restrict__ 
     for(int ts = 0; ts < REGTILESIZE; ts++){
         #pragma unroll
         for(int tt = 0; tt < REGTILESIZE; tt++){
-            C[(y+ts) * N + x + tt] = tmp[ts * REGTILESIZE + tt];
+            C[(y+ts) * N + x + tt] = alpha * tmp[ts * REGTILESIZE + tt] +
+                                        beta * C[(y+ts) * N + x + tt];
         }
     }
 }
@@ -191,7 +199,9 @@ void mm2DRegisterTilingNoSAtranspose(float* __restrict__ A, float* __restrict__ 
 // 2D register tiling (with sA transposed)
 template <const int BLOCKSIZE, const int REGTILESIZE>
 __global__
-void mm2DRegisterTiling(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C, int M, int N, int K){
+void mm2DRegisterTiling(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C,
+                        int M, int N, int K,
+                        float alpha, float beta){
     __shared__ float sA[BLOCKSIZE * BLOCKSIZE];
     __shared__ float sB[BLOCKSIZE * BLOCKSIZE];
 
@@ -253,16 +263,19 @@ void mm2DRegisterTiling(float* __restrict__ A, float* __restrict__ B, float* __r
     for(int ts = 0; ts < REGTILESIZE; ts++){
         #pragma unroll
         for(int tt = 0; tt < REGTILESIZE; tt++){
-            C[(y+ts) * N + x + tt] = tmp[ts * REGTILESIZE + tt];
+            C[(y+ts) * N + x + tt] = alpha * tmp[ts * REGTILESIZE + tt] +
+                                        beta * C[(y+ts) * N + x + tt];
         }
     }
 }
 
-
+// TODO: convert MM to GEMM
 // vectorize register loads
 template <const int BLOCKSIZE, const int REGTILESIZE>
 __global__
-void vectorizeRegisterLoads(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C, int M, int N, int K){
+void vectorizeRegisterLoads(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C,
+                            int M, int N, int K,
+                            float alpha, float beta){
     __shared__ float sA[BLOCKSIZE * BLOCKSIZE];
     __shared__ float sB[BLOCKSIZE * BLOCKSIZE];
 
@@ -363,6 +376,8 @@ int main(){
     // A(M x K) * B(K x N) = C(M x N)
     int M, N, K;
     M = N = K = matSize;
+    float alpha = 1.1f;
+    float beta  = 2.4f;
 
     // matrix sizes
     int sizeA = M * K;
@@ -393,23 +408,28 @@ int main(){
     gpuErrchk(cudaMemcpy(B, hB, sizeB * sizeof(float), cudaMemcpyHostToDevice));
 
     //*********** GPU compute **********************//
-    // // Naive MM
-    // int numThreads = 32;
-    // dim3 blockSize(numThreads, numThreads);
-    // dim3 gridSize(ceil(M / numThreads), ceil(N / numThreads));
-    // std::cout << "BlockSize : " << blockSize.x << " " << blockSize.y <<"\n";
-    // std::cout << "GridSize : " << gridSize.x << " " << gridSize.y <<"\n";        
-    // mmNaive<<<gridSize, blockSize>>>(A, B, C, M, N, K);
+/*{
+    // Naive MM
+    int numThreads = 32;
+    dim3 blockSize(numThreads, numThreads);
+    dim3 gridSize(ceil(M / numThreads), ceil(N / numThreads));
+    mmNaive<<<gridSize, blockSize>>>(A, B, C, M, N, K, alpha, beta);
+}*/
 
-    // // Coalesced access
-    // mmCoalesced<<<gridSize, blockSize>>>(A, B, C, M, N, K);
+    // Coalesced access
+/*{
+    int numThreads = 32;
+    dim3 blockSize(numThreads, numThreads);
+    dim3 gridSize(ceil(N / numThreads), ceil(M / numThreads));
+    mmCoalesced<<<gridSize, blockSize>>>(A, B, C, M, N, K, alpha, beta);
+}*/
 
 /*{
     // Shared memory
     const int numThreads = 32;
     dim3 blockSize(numThreads, numThreads);
     dim3 gridSize(CEIL_DIV(N, numThreads), CEIL_DIV(M, numThreads));
-    mmShared<numThreads><<<gridSize, blockSize>>>(A, B, C, M, N, K);
+    mmShared<numThreads><<<gridSize, blockSize>>>(A, B, C, M, N, K, alpha, beta);
 }*/
 
 /*{
@@ -418,17 +438,19 @@ int main(){
     const int REGTILESIZE = 8;
     dim3 blockSize(numThreads, numThreads / REGTILESIZE);
     dim3 gridSize(CEIL_DIV(N, numThreads), CEIL_DIV(M, numThreads));
-    mm1DRegisterTiling<numThreads, REGTILESIZE><<<gridSize, blockSize>>>(A, B, C, M, N, K);
+    mm1DRegisterTiling<numThreads, REGTILESIZE>
+                        <<<gridSize, blockSize>>>(A, B, C, M, N, K, alpha, beta);
 }*/
 
-/*{
+{
     // 2D tiling (no sA transpose)
     const int BLOCKSIZE = 64;
     const int REGTILESIZE = 4;
     dim3 blockSize(BLOCKSIZE/REGTILESIZE, BLOCKSIZE/REGTILESIZE); // numThreads in x, y direction
     dim3 gridSize(CEIL_DIV(N, BLOCKSIZE), CEIL_DIV(M, BLOCKSIZE));
-    mm2DRegisterTilingNoSAtranspose<BLOCKSIZE, REGTILESIZE><<<gridSize, blockSize>>>(A, B, C, M, N, K);
-}*/
+    mm2DRegisterTilingNoSAtranspose<BLOCKSIZE, REGTILESIZE>
+                        <<<gridSize, blockSize>>>(A, B, C, M, N, K, alpha, beta);
+}
 
 /*{
     // 2D tiling (with sA transposed)
@@ -436,20 +458,25 @@ int main(){
     const int REGTILESIZE = 4;
     dim3 blockSize(BLOCKSIZE/REGTILESIZE, BLOCKSIZE/REGTILESIZE); // numThreads in x, y direction
     dim3 gridSize(CEIL_DIV(N, BLOCKSIZE), CEIL_DIV(M, BLOCKSIZE));
-    mm2DRegisterTiling<BLOCKSIZE, REGTILESIZE><<<gridSize, blockSize>>>(A, B, C, M, N, K);
+    mm2DRegisterTiling<BLOCKSIZE, REGTILESIZE>
+                        <<<gridSize, blockSize>>>(A, B, C, M, N, K, alpha, beta);
 }*/
 
+
+// TODO: convert MM to GEMM
+/*
 {
     // vectorize register loads
     const int BLOCKSIZE = 64;
     const int REGTILESIZE = 4;
     dim3 blockSize(BLOCKSIZE/REGTILESIZE, BLOCKSIZE/REGTILESIZE); // numThreads in x, y direction
     dim3 gridSize(CEIL_DIV(N, BLOCKSIZE), CEIL_DIV(M, BLOCKSIZE));
-    vectorizeRegisterLoads<BLOCKSIZE, REGTILESIZE><<<gridSize, blockSize>>>(A, B, C, M, N, K);
-}
+    vectorizeRegisterLoads<BLOCKSIZE, REGTILESIZE>
+                        <<<gridSize, blockSize>>>(A, B, C, M, N, K, alpha, beta);
+}*/
     
     auto start = std::chrono::steady_clock::now();
-    cuBLAScomputeMM(A, B, C_cuBLAS, M, N, K);
+    cuBLAScomputeMM(A, B, C_cuBLAS, M, N, K, alpha, beta);
     auto end = std::chrono::steady_clock::now();
     auto diff = end - start;
     std::cout << std::chrono::duration<double, std::milli>(diff).count() << " milli-seconds" << std::endl;    

@@ -2,7 +2,6 @@
 
 NOTE : Performance analysis of a reduction operation in GPU is done [here](https://github.com/SKPsanjeevi/parallel-sum)
 
-**TODO: convert MM to GEMM**
 
 Performance data on RTX3050Mobile for A(M x P) * B(P x N) = C(M x N). Here M = N = P = 1024.
 
