@@ -1,4 +1,4 @@
-*** Work in Progress ***
+**Work in Progress**
 
 NOTE : Performance analysis of a reduction operation in GPU is done [here](https://github.com/SKPsanjeevi/parallel-sum)
 

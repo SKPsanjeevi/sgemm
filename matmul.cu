@@ -121,11 +121,10 @@ void mm1DRegisterTiling(float* __restrict__ A, float* __restrict__ B, float* __r
 
 
 
-
 // 2D register tiling (without sA transposed)
 template <const int BLOCKSIZE, const int REGTILESIZE>
 __global__
-void mm2DRegisterTilingNoSAtranspose(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C, int M, int N, int P){
+void mm2DRegisterTilingNoSAtranspose(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C, int M, int N, int K){
     __shared__ float sA[BLOCKSIZE * BLOCKSIZE];
     __shared__ float sB[BLOCKSIZE * BLOCKSIZE];
 
@@ -135,34 +134,37 @@ void mm2DRegisterTilingNoSAtranspose(float* __restrict__ A, float* __restrict__ 
     int tx = threadIdx.x * REGTILESIZE;
     int ty = threadIdx.y * REGTILESIZE;
 
+    A += K * BLOCKSIZE * blockIdx.y;
+    B += blockIdx.x * BLOCKSIZE;
+
     // each thread takes care of REGTILESIZE*REGTILESIZE outputs
     float tmp[REGTILESIZE * REGTILESIZE] = {0.0f};
     float Atmp[REGTILESIZE] = {0.0f};
     float Btmp[REGTILESIZE] = {0.0f};
 
-    for(int p = 0; p < P; p += BLOCKSIZE) {             // sliding window
-
-        int startA = P * BLOCKSIZE * blockIdx.y + p;    // starting element of A's submatrix
-        int startB = p * N + blockIdx.x * BLOCKSIZE;    // starting element of B's submatrix
+    for(int k = 0; k < K; k += BLOCKSIZE) {             // sliding window
 
         // copy data to shared memory
         #pragma unroll
         for(int ts = 0; ts < REGTILESIZE; ts++){
             #pragma unroll
             for(int tt = 0; tt < REGTILESIZE; tt++){
-                sA[(ty + ts) * BLOCKSIZE + tx + tt] = A[startA + (ty + ts) * P + tx + tt];
-                sB[(ty + ts) * BLOCKSIZE + tx + tt] = B[startB + (ty + ts) * N + tx + tt];
+                sA[(ty + ts) * BLOCKSIZE + tx + tt] = A[(ty + ts) * K + tx + tt];
+                sB[(ty + ts) * BLOCKSIZE + tx + tt] = B[(ty + ts) * N + tx + tt];
             }
         }
         __syncthreads();
 
+        A += BLOCKSIZE;         // update starting element of A's submatrix
+        B += BLOCKSIZE * N;     // update starting element of B's submatrix
+
         // loop over row/col and add to respective output's tmp variable
-        for(int pt = 0; pt < BLOCKSIZE; pt += REGTILESIZE) {
-            for(int k = 0; k < REGTILESIZE; k++){
+        for(int kt = 0; kt < BLOCKSIZE; kt += REGTILESIZE) {
+            for(int k = 0; k < REGTILESIZE; k++){   // load sA, sB to register tiles
                 #pragma unroll
                 for(int ts = 0; ts < REGTILESIZE; ts++){
-                    Atmp[ts] = sA[(ty + ts) * BLOCKSIZE + pt + k];
-                    Btmp[ts] = sB[(pt + k) * BLOCKSIZE + ts + tx];
+                    Atmp[ts] = sA[(ty + ts) * BLOCKSIZE + kt + k];
+                    Btmp[ts] = sB[(kt + k) * BLOCKSIZE + ts + tx];
                 }
 
                 #pragma unroll
@@ -189,7 +191,7 @@ void mm2DRegisterTilingNoSAtranspose(float* __restrict__ A, float* __restrict__ 
 // 2D register tiling (with sA transposed)
 template <const int BLOCKSIZE, const int REGTILESIZE>
 __global__
-void mm2DRegisterTiling(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C, int M, int N, int P){
+void mm2DRegisterTiling(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C, int M, int N, int K){
     __shared__ float sA[BLOCKSIZE * BLOCKSIZE];
     __shared__ float sB[BLOCKSIZE * BLOCKSIZE];
 
@@ -199,33 +201,36 @@ void mm2DRegisterTiling(float* __restrict__ A, float* __restrict__ B, float* __r
     int tx = threadIdx.x * REGTILESIZE;
     int ty = threadIdx.y * REGTILESIZE;
 
+    A += K * BLOCKSIZE * blockIdx.y;
+    B += blockIdx.x * BLOCKSIZE;
+
     // each thread takes care of REGTILESIZE*REGTILESIZE outputs
     float tmp[REGTILESIZE * REGTILESIZE] = {0.0f};
     float Atmp[REGTILESIZE] = {0.0f};
     float Btmp[REGTILESIZE] = {0.0f};
 
-    for(int p = 0; p < P; p += BLOCKSIZE) {             // sliding window
-
-        int startA = P * BLOCKSIZE * blockIdx.y + p;    // starting element of A's submatrix
-        int startB = p * N + blockIdx.x * BLOCKSIZE;    // starting element of B's submatrix
+    for(int k = 0; k < K; k += BLOCKSIZE) {             // sliding window
 
         // copy data to shared memory
         #pragma unroll
         for(int ts = 0; ts < REGTILESIZE; ts++){
             #pragma unroll
             for(int tt = 0; tt < REGTILESIZE; tt++){
-                sA[(tx + tt) * BLOCKSIZE + ty + ts] = A[startA + (ty + ts) * P + tx + tt];
-                sB[(ty + ts) * BLOCKSIZE + tx + tt] = B[startB + (ty + ts) * N + tx + tt];
+                sA[(tx + tt) * BLOCKSIZE + ty + ts] = A[(ty + ts) * K + tx + tt];
+                sB[(ty + ts) * BLOCKSIZE + tx + tt] = B[(ty + ts) * N + tx + tt];
             }
         }
         __syncthreads();
 
+        A += BLOCKSIZE;         // update starting element of A's submatrix
+        B += BLOCKSIZE * N;     // update starting element of B's submatrix
+
         // loop over row/col and add to respective output's tmp variable
-        for(int pt = 0; pt < BLOCKSIZE; pt += REGTILESIZE) {
+        for(int kt = 0; kt < BLOCKSIZE; kt += REGTILESIZE) {
             #pragma unroll
             for(int k = 0; k < REGTILESIZE; k++){
-                int AtmpOffset = (pt + k) * BLOCKSIZE + ty;
-                int BtmpOffset = (pt + k) * BLOCKSIZE + tx;
+                int AtmpOffset = (kt + k) * BLOCKSIZE + ty;
+                int BtmpOffset = (kt + k) * BLOCKSIZE + tx;
                 #pragma unroll
                 for(int ts = 0; ts < REGTILESIZE; ts++){
                     Atmp[ts] = sA[AtmpOffset + ts];
@@ -257,7 +262,7 @@ void mm2DRegisterTiling(float* __restrict__ A, float* __restrict__ B, float* __r
 // vectorize register loads
 template <const int BLOCKSIZE, const int REGTILESIZE>
 __global__
-void vectorizeRegisterLoads(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C, int M, int N, int P){
+void vectorizeRegisterLoads(float* __restrict__ A, float* __restrict__ B, float* __restrict__ C, int M, int N, int K){
     __shared__ float sA[BLOCKSIZE * BLOCKSIZE];
     __shared__ float sB[BLOCKSIZE * BLOCKSIZE];
 
@@ -267,6 +272,9 @@ void vectorizeRegisterLoads(float* __restrict__ A, float* __restrict__ B, float*
     int tx = threadIdx.x * REGTILESIZE;
     int ty = threadIdx.y * REGTILESIZE;
 
+    A += K * BLOCKSIZE * blockIdx.y;
+    B += blockIdx.x * BLOCKSIZE;
+
     // each thread takes care of REGTILESIZE*REGTILESIZE outputs
     float tmp[REGTILESIZE * REGTILESIZE] = {0.0f};
     float Atmp[REGTILESIZE] = {0.0f};
@@ -274,16 +282,15 @@ void vectorizeRegisterLoads(float* __restrict__ A, float* __restrict__ B, float*
 
     float4 ldVec;
 
-    for(int p = 0; p < P; p += BLOCKSIZE) {             // sliding window
+    for(int k = 0; k < K; k += BLOCKSIZE) {             // sliding window
 
-        int startA = P * BLOCKSIZE * blockIdx.y + p;    // starting element of A's submatrix
-        int startB = p * N + blockIdx.x * BLOCKSIZE;    // starting element of B's submatrix
+        // int startA = K * BLOCKSIZE * blockIdx.y + k;    // starting element of A's submatrix
+        // int startB = k * N + blockIdx.x * BLOCKSIZE;    // starting element of B's submatrix
 
         // copy data to shared memory
         for(int ts = 0; ts < REGTILESIZE; ts++) {
             for(int tt = 0; tt < REGTILESIZE; tt+=4){
-                ldVec = 
-                reinterpret_cast<float4*>(&A[startA + (ty + ts) * P + tx + tt])[0];
+                ldVec = reinterpret_cast<float4*>(&A[(ty + ts) * K + tx + tt])[0];
                 sA[(tx + tt) * BLOCKSIZE + ty + ts] = ldVec.w;
                 sA[(tx + tt + 1) * BLOCKSIZE + ty + ts] = ldVec.x;
                 sA[(tx + tt + 2) * BLOCKSIZE + ty + ts] = ldVec.y;
@@ -294,17 +301,20 @@ void vectorizeRegisterLoads(float* __restrict__ A, float* __restrict__ B, float*
         for(int ts = 0; ts < REGTILESIZE; ts++) {
             for(int tt = 0; tt < REGTILESIZE; tt+=4){
                 reinterpret_cast<float4*> (&sB[(ty + ts) * BLOCKSIZE + tx + tt])[0] = 
-                reinterpret_cast<float4*> (&B[startB + (ty + ts) * N + tx + tt])[0];
+                reinterpret_cast<float4*> (&B[(ty + ts) * N + tx + tt])[0];
             }
         }
         __syncthreads();
 
+        A += BLOCKSIZE;         // update starting element of A's submatrix
+        B += BLOCKSIZE * N;     // update starting element of B's submatrix
+
         // loop over row/col and add to respective output's tmp variable
-        for(int pt = 0; pt < BLOCKSIZE; pt += REGTILESIZE) {
+        for(int kt = 0; kt < BLOCKSIZE; kt += REGTILESIZE) {
 
             for(int k = 0; k < REGTILESIZE; k++){
-                int AtmpOffset = (pt + k) * BLOCKSIZE + ty;
-                int BtmpOffset = (pt + k) * BLOCKSIZE + tx;
+                int AtmpOffset = (kt + k) * BLOCKSIZE + ty;
+                int BtmpOffset = (kt + k) * BLOCKSIZE + tx;
 
                 for(int ts = 0; ts < REGTILESIZE; ts+=4){
                     reinterpret_cast<float4*>(&Atmp[ts])[0] = 
@@ -322,7 +332,6 @@ void vectorizeRegisterLoads(float* __restrict__ A, float* __restrict__ B, float*
         }
         
         __syncthreads();
-
 
     }
 
@@ -351,13 +360,13 @@ void vectorizeRegisterLoads(float* __restrict__ A, float* __restrict__ B, float*
 
 
 int main(){
-    // A(M x P) * B(P x N) = C(M x N)
-    int M, N, P;
-    M = N = P = matSize;
+    // A(M x K) * B(K x N) = C(M x N)
+    int M, N, K;
+    M = N = K = matSize;
 
     // matrix sizes
-    int sizeA = M * P;
-    int sizeB = P * N;
+    int sizeA = M * K;
+    int sizeB = K * N;
     int sizeC = M * N;
 
     // host memory allocation
@@ -390,27 +399,27 @@ int main(){
     // dim3 gridSize(ceil(M / numThreads), ceil(N / numThreads));
     // std::cout << "BlockSize : " << blockSize.x << " " << blockSize.y <<"\n";
     // std::cout << "GridSize : " << gridSize.x << " " << gridSize.y <<"\n";        
-    // mmNaive<<<gridSize, blockSize>>>(A, B, C, M, N, P);
+    // mmNaive<<<gridSize, blockSize>>>(A, B, C, M, N, K);
 
     // // Coalesced access
-    // mmCoalesced<<<gridSize, blockSize>>>(A, B, C, M, N, P);
+    // mmCoalesced<<<gridSize, blockSize>>>(A, B, C, M, N, K);
 
 /*{
     // Shared memory
     const int numThreads = 32;
     dim3 blockSize(numThreads, numThreads);
     dim3 gridSize(CEIL_DIV(N, numThreads), CEIL_DIV(M, numThreads));
-    mmShared<numThreads><<<gridSize, blockSize>>>(A, B, C, M, N, P);
+    mmShared<numThreads><<<gridSize, blockSize>>>(A, B, C, M, N, K);
 }*/
 
-{
+/*{
     // 1D tiling
     const int numThreads = 32;
     const int REGTILESIZE = 8;
     dim3 blockSize(numThreads, numThreads / REGTILESIZE);
     dim3 gridSize(CEIL_DIV(N, numThreads), CEIL_DIV(M, numThreads));
-    mm1DRegisterTiling<numThreads, REGTILESIZE><<<gridSize, blockSize>>>(A, B, C, M, N, P);
-}
+    mm1DRegisterTiling<numThreads, REGTILESIZE><<<gridSize, blockSize>>>(A, B, C, M, N, K);
+}*/
 
 /*{
     // 2D tiling (no sA transpose)
@@ -418,29 +427,29 @@ int main(){
     const int REGTILESIZE = 4;
     dim3 blockSize(BLOCKSIZE/REGTILESIZE, BLOCKSIZE/REGTILESIZE); // numThreads in x, y direction
     dim3 gridSize(CEIL_DIV(N, BLOCKSIZE), CEIL_DIV(M, BLOCKSIZE));
-    mm2DRegisterTilingNoSAtranspose<BLOCKSIZE, REGTILESIZE><<<gridSize, blockSize>>>(A, B, C, M, N, P);
+    mm2DRegisterTilingNoSAtranspose<BLOCKSIZE, REGTILESIZE><<<gridSize, blockSize>>>(A, B, C, M, N, K);
 }*/
 
-    // // 2D tiling (with sA transposed)
-    // {
-    // const int BLOCKSIZE = 64;
-    // const int REGTILESIZE = 4;
-    // dim3 blockSize(BLOCKSIZE/REGTILESIZE, BLOCKSIZE/REGTILESIZE); // numThreads in x, y direction
-    // dim3 gridSize(CEIL_DIV(N, BLOCKSIZE), CEIL_DIV(M, BLOCKSIZE));
-    // mm2DRegisterTiling<BLOCKSIZE, REGTILESIZE><<<gridSize, blockSize>>>(A, B, C, M, N, P);
-    // }
-
 /*{
+    // 2D tiling (with sA transposed)
+    const int BLOCKSIZE = 64;
+    const int REGTILESIZE = 4;
+    dim3 blockSize(BLOCKSIZE/REGTILESIZE, BLOCKSIZE/REGTILESIZE); // numThreads in x, y direction
+    dim3 gridSize(CEIL_DIV(N, BLOCKSIZE), CEIL_DIV(M, BLOCKSIZE));
+    mm2DRegisterTiling<BLOCKSIZE, REGTILESIZE><<<gridSize, blockSize>>>(A, B, C, M, N, K);
+}*/
+
+{
     // vectorize register loads
     const int BLOCKSIZE = 64;
     const int REGTILESIZE = 4;
     dim3 blockSize(BLOCKSIZE/REGTILESIZE, BLOCKSIZE/REGTILESIZE); // numThreads in x, y direction
     dim3 gridSize(CEIL_DIV(N, BLOCKSIZE), CEIL_DIV(M, BLOCKSIZE));
-    vectorizeRegisterLoads<BLOCKSIZE, REGTILESIZE><<<gridSize, blockSize>>>(A, B, C, M, N, P);
-}*/
+    vectorizeRegisterLoads<BLOCKSIZE, REGTILESIZE><<<gridSize, blockSize>>>(A, B, C, M, N, K);
+}
     
     auto start = std::chrono::steady_clock::now();
-    cuBLAScomputeMM(A, B, C_cuBLAS, M, N, P);
+    cuBLAScomputeMM(A, B, C_cuBLAS, M, N, K);
     auto end = std::chrono::steady_clock::now();
     auto diff = end - start;
     std::cout << std::chrono::duration<double, std::milli>(diff).count() << " milli-seconds" << std::endl;    
@@ -451,7 +460,7 @@ int main(){
 
 
     // CPU compute of MM
-    computeMM(hA, hB, hC, M, N, P);
+    computeMM(hA, hB, hC, M, N, K);
 
     // cout << "Host output\n";
     // printArrayDevice(hC, M, N);
